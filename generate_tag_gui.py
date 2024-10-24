@@ -26,7 +26,7 @@ class LabelGeneratorApp:
     def __init__(self, master):
         self.master = master
         master.title("Barcode Label Generator")
-        master.geometry("600x600")  # Made window taller
+        master.geometry("600x600")
         
         # Try to load last save directory
         self.config_file = os.path.join(os.path.expanduser("~"), ".label_generator_config")
@@ -35,7 +35,6 @@ class LabelGeneratorApp:
         self.create_widgets()
 
     def load_last_directory(self):
-        """Load the last used directory from config file"""
         try:
             if os.path.exists(self.config_file):
                 with open(self.config_file, 'r') as f:
@@ -46,7 +45,6 @@ class LabelGeneratorApp:
         return os.path.expanduser("~")
 
     def save_last_directory(self, directory):
-        """Save the last used directory to config file"""
         try:
             with open(self.config_file, 'w') as f:
                 json.dump({'last_directory': directory}, f)
@@ -55,17 +53,17 @@ class LabelGeneratorApp:
 
     def create_widgets(self):
         # Main container
-        main_frame = ttk.Frame(self.master)
-        main_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        self.main_frame = ttk.Frame(self.master)
+        self.main_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
         # Title
-        title_label = ttk.Label(main_frame, 
+        title_label = ttk.Label(self.main_frame, 
                               text="Barcode Label Generator", 
                               font=('Helvetica', 14, 'bold'))
         title_label.pack(pady=10)
 
         # Number of items input frame
-        input_frame = ttk.LabelFrame(main_frame, text="Number of Labels")
+        input_frame = ttk.LabelFrame(self.main_frame, text="Number of Labels")
         input_frame.pack(fill="x", padx=5, pady=5)
 
         # Number of items input with label
@@ -76,40 +74,42 @@ class LabelGeneratorApp:
                   text="Generate Input Fields",
                   command=self.generate_input_fields).pack(side="left", padx=5, pady=5)
 
-        # Scrollable frame for item inputs
-        scroll_container = ttk.LabelFrame(main_frame, text="Label Details")
-        scroll_container.pack(fill="both", expand=True, padx=5, pady=5)
-
-        # Create canvas and scrollbar
-        self.canvas = tk.Canvas(scroll_container)
-        self.scrollbar = ttk.Scrollbar(scroll_container, 
-                                     orient="vertical", 
-                                     command=self.canvas.yview)
+        # Create container frame for canvas and scrollbar
+        self.container = ttk.LabelFrame(self.main_frame, text="Label Details")
+        self.container.pack(fill="both", expand=True, padx=5, pady=5)
+        
+        # Create canvas
+        self.canvas = tk.Canvas(self.container)
+        
+        # Create scrollbar
+        self.scrollbar = ttk.Scrollbar(self.container, orient="vertical", command=self.canvas.yview)
+        
+        # Create frame inside canvas
         self.scrollable_frame = ttk.Frame(self.canvas)
-
         self.scrollable_frame.bind(
             "<Configure>",
             lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
         )
 
-        # Mouse wheel scrolling
-        def _on_mousewheel(event):
-            self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
-        # Create window inside canvas
-        self.canvas.create_window((0, 0), 
-                                window=self.scrollable_frame, 
-                                anchor="nw", 
-                                width=self.canvas.winfo_width())
+        # Place the frame in the canvas
+        self.canvas_frame = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
 
         # Configure canvas and scrollbar
         self.canvas.configure(yscrollcommand=self.scrollbar.set)
-        self.canvas.pack(side="left", fill="both", expand=True, padx=(5,0), pady=5)
-        self.scrollbar.pack(side="right", fill="y", pady=5)
+
+        # Pack canvas and scrollbar
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+
+        # Bind canvas resizing
+        self.canvas.bind('<Configure>', self.on_canvas_configure)
+
+        # Mouse wheel scrolling
+        self.scrollable_frame.bind('<Enter>', self._bound_to_mousewheel)
+        self.scrollable_frame.bind('<Leave>', self._unbound_to_mousewheel)
 
         # Button frame
-        button_frame = ttk.Frame(main_frame)
+        button_frame = ttk.Frame(self.main_frame)
         button_frame.pack(fill="x", padx=5, pady=10)
 
         # Generate Labels button
@@ -117,6 +117,19 @@ class LabelGeneratorApp:
                                         text="Generate Labels", 
                                         command=self.generate_labels)
         self.generate_button.pack(side="right", padx=5)
+
+    def on_canvas_configure(self, event):
+        # Update the width of the canvas window to fit the frame
+        self.canvas.itemconfig(self.canvas_frame, width=event.width)
+
+    def _bound_to_mousewheel(self, event):
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+
+    def _unbound_to_mousewheel(self, event):
+        self.canvas.unbind_all("<MouseWheel>")
+
+    def _on_mousewheel(self, event):
+        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
 
     def generate_input_fields(self):
         # Clear previous inputs
@@ -156,6 +169,9 @@ class LabelGeneratorApp:
             barcode.grid(row=2, column=1, padx=5, pady=2, sticky="ew")
 
             self.item_inputs.append((title1, title2, barcode))
+
+        # Update the scroll region
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
     def generate_labels(self):
         if not hasattr(self, 'item_inputs'):
