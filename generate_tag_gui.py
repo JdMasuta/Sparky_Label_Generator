@@ -158,33 +158,72 @@ class LabelGeneratorApp:
             self.item_inputs.append((title1, title2, barcode))
 
     def generate_labels(self):
-    if not hasattr(self, 'item_inputs'):
-        messagebox.showerror("Error", "Please generate input fields first.")
-        return
+        if not hasattr(self, 'item_inputs'):
+            messagebox.showerror("Error", "Please generate input fields first.")
+            return
 
-    try:
-        items = []
-        for title1, title2, barcode in self.item_inputs:
-            items.append({
-                'title1': title1.get(),
-                'title2': title2.get(),
-                'barcode': barcode.get()
-            })
-
-        pdf_bytes = pdf_generator.create_pdf(items)
-        
         try:
-            with open("labels.pdf", "wb") as f:
-                f.write(pdf_bytes)
-            messagebox.showinfo("Success", "Labels generated successfully! Check 'labels.pdf' in the current directory.")
-        except Exception as e:
-            messagebox.showerror("File Error", f"Error saving PDF file: {str(e)}\nMake sure you have write permissions in the current directory.")
+            # Validate inputs
+            items = []
+            for i, (title1, title2, barcode) in enumerate(self.item_inputs):
+                if not all([title1.get(), title2.get(), barcode.get()]):
+                    messagebox.showerror("Error", 
+                                       f"Please fill in all fields for Label {i+1}")
+                    return
+                
+                items.append({
+                    'title1': title1.get(),
+                    'title2': title2.get(),
+                    'barcode': barcode.get()
+                })
+
+            # Generate PDF
+            pdf_bytes = pdf_generator.create_pdf(items)
             
-    except Exception as e:
-        messagebox.showerror("Error", f"Error generating PDF: {str(e)}")
-        # Print for debugging
-        import traceback
-        traceback.print_exc()
+            # Ask user where to save the file
+            initial_dir = self.last_directory
+            file_path = filedialog.asksaveasfilename(
+                initialdir=initial_dir,
+                defaultextension=".pdf",
+                filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+                initialfile="labels.pdf",
+                title="Save Labels PDF"
+            )
+            
+            if file_path:  # User didn't cancel
+                # Save the new directory
+                self.last_directory = os.path.dirname(file_path)
+                self.save_last_directory(self.last_directory)
+                
+                try:
+                    with open(file_path, "wb") as f:
+                        f.write(pdf_bytes)
+                    messagebox.showinfo("Success", 
+                                      f"Labels saved successfully to:\n{file_path}")
+                    
+                    # Ask if user wants to open the generated PDF
+                    if messagebox.askyesno("Open PDF", 
+                                         "Would you like to open the generated PDF?"):
+                        try:
+                            if sys.platform.startswith('win'):
+                                os.startfile(file_path)
+                            elif sys.platform.startswith('darwin'):  # macOS
+                                os.system(f'open "{file_path}"')
+                            else:  # Linux
+                                os.system(f'xdg-open "{file_path}"')
+                        except Exception as e:
+                            messagebox.showwarning("Warning", 
+                                                 f"Could not open PDF automatically: {str(e)}")
+                            
+                except Exception as e:
+                    messagebox.showerror("File Error", 
+                        f"Error saving PDF file: {str(e)}\n"
+                        "Make sure you have write permissions for the selected location.")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Error generating PDF: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
     root = tk.Tk()
