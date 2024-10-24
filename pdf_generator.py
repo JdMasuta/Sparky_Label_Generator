@@ -19,7 +19,7 @@ LABEL_MARGIN_BOTTOM = 4
 
 # Barcode dimensions
 BARCODE_HEIGHT = 50
-BAR_WIDTH_NARROW = 1.5 # Barcode width modifier
+BAR_WIDTH_NARROW = 1.5  # Barcode width modifier
 
 def generate_code39(data: str) -> List[Tuple[int, int, int, int]]:
     """Generate Code 39 barcode as a list of rectangles."""
@@ -44,8 +44,30 @@ def generate_code39(data: str) -> List[Tuple[int, int, int, int]]:
     wide_width = narrow_width * 3
     height = 100
 
+    # Pre-process the data to ensure valid characters
+    processed_data = ""
+    for char in data.upper():  # Convert to uppercase
+        if char.isalnum():  # If alphanumeric, keep it
+            processed_data += char
+        elif char in "-. $/+%":  # If valid special character, keep it
+            processed_data += char
+        else:  # Replace invalid characters with closest valid ones
+            if char in "[]":
+                processed_data += "/"
+            elif char in "()":
+                processed_data += "-"
+            elif char in "!@#&":
+                processed_data += "$"
+            else:
+                processed_data += "X"  # Default replacement for invalid chars
+
+    if not processed_data:
+        raise ValueError("No valid barcode characters after processing")
+
     def add_char(char):
         nonlocal x
+        if char not in chars:
+            raise ValueError(f"Invalid character in barcode: {char}")
         pattern = patterns[chars.index(char)]
         for i, bit in enumerate(pattern):
             if bit == '1':
@@ -53,138 +75,155 @@ def generate_code39(data: str) -> List[Tuple[int, int, int, int]]:
                 rectangles.append((x, y, width, height))
             x += wide_width if i % 2 == 0 else narrow_width
 
-    # Start character
-    add_char('*')
+    try:
+        # Start character
+        add_char('*')
 
-    for char in data:
-        add_char(char)
+        # Process the data
+        for char in processed_data:
+            add_char(char)
 
-    # Stop character
-    add_char('*')
+        # Stop character
+        add_char('*')
+
+    except ValueError as e:
+        raise ValueError(f"Error generating barcode: {str(e)}")
 
     return rectangles
 
 def create_pdf(items: List[dict]) -> bytes:
-    """Create a PDF with improved label formatting, precisely centered content, and cutting guide, supporting multiple pages."""
+    """Create a PDF with improved label formatting, precisely centered content, and cutting guide."""
     def escape_pdf_string(s):
-        return s.replace('(', '\\(').replace(')', '\\)')
+        return s.replace('(', '\\(').replace(')', '\\)').replace('\\', '\\\\')
 
     def get_string_width(s, font_size, font_type):
         char_width = CHAR_WIDTH_BOLD if font_type == FONT_BOLD else CHAR_WIDTH_REGULAR
         return len(s) * char_width * font_size
 
-    pdf_content = [
-        '%PDF-1.4',
-        '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj'
-    ]
+    try:
+        # Validate items
+        if not items:
+            raise ValueError("No items provided for PDF generation")
+        
+        for item in items:
+            if not all(key in item for key in ['title1', 'title2', 'barcode']):
+                raise ValueError("Missing required fields in item (title1, title2, or barcode)")
 
-    pages = []
-    page_count = (len(items) + 3) // 4  # Calculate total number of pages
+        pdf_content = [
+            '%PDF-1.4',
+            '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj'
+        ]
 
-    for page in range(page_count):
-        content = ['BT']
-        for i in range(4):
-            item_index = page * 4 + i
-            if item_index >= len(items):
-                break
+        pages = []
+        page_count = (len(items) + 3) // 4  # Calculate total number of pages
 
-            item = items[item_index]
-            y_bottom = 792 - (i * 198 + 180)  # Bottom of the label
-            y_top = y_bottom + LABEL_HEIGHT   # Top of the label
-            
-            # Draw main border
-            content.extend([
-                '2 w',  # Set line width to 2
-                '0.8 0.8 0.8 RG',  # Set stroke color to light gray
-                f'{LABEL_MARGIN_LEFT} {y_bottom+LABEL_MARGIN_BOTTOM} {LABEL_WIDTH} {LABEL_HEIGHT} re S',  # Draw rectangle
-            ])
-            
-            # Draw secondary dashed border for cutting guide
-            content.extend([
-                '[4 4] 0 d',  # Set dash pattern
-                '1 w',  # Set line width to 1
-                '0 0 0 RG',  # Set stroke color to black
-                f'{LABEL_MARGIN_LEFT-10} {y_bottom-6} {LABEL_WIDTH+20} {LABEL_HEIGHT+20} re S',  # Draw rectangle
-                '[] 0 d'  # Reset dash pattern
-            ])
-            
-            # Center of the label
-            center_x = LABEL_MARGIN_LEFT + (LABEL_WIDTH / 2)
-            
-            # Title 1 (larger font, centered)
-            title1_width = get_string_width(item["title1"], FONT_SIZE_TITLE1, FONT_BOLD)
-            title1_start = center_x - (title1_width / 2)
-            content.extend([
-                f'/{FONT_BOLD} {FONT_SIZE_TITLE1} Tf',  # Bold font
-                '0 0 0 rg',  # Black color
-                f'1 0 0 1 {title1_start} {y_top-30} Tm',
-                f'({escape_pdf_string(item["title1"])}) Tj'
-            ])
-            
-            # Title 2 (smaller font, centered)
-            title2_width = get_string_width(item["title2"], FONT_SIZE_TITLE2, FONT_REGULAR)
-            title2_start = center_x - (title2_width / 2)
-            content.extend([
-                f'/{FONT_REGULAR} {FONT_SIZE_TITLE2} Tf',  # Regular font
-                f'1 0 0 1 {title2_start} {y_top-55} Tm',
-                f'({escape_pdf_string(item["title2"])}) Tj'
-            ])
-            
-            # Generate and draw barcode (centered)
-            barcode = generate_code39(item['barcode'])
-            content.append('0 G')  # Set fill color to black
-            barcode_total_width = sum(rect[2] for rect in barcode) * 0.5
-            barcode_start_x = center_x - (barcode_total_width / 2) - 50
-            barcode_start_y = y_bottom + (LABEL_HEIGHT - BARCODE_HEIGHT) / 3  # Bottom third vertically
-            for rect in barcode:
-                x, _, width, height = rect
-                content.append(f'{barcode_start_x + x*0.5} {barcode_start_y} {width*0.5} {BARCODE_HEIGHT} re f')
-            
-            # Barcode number (centered)
-            barcode_text = "*" + item["barcode"] + "*"
-            barcode_text_width = get_string_width(barcode_text, FONT_SIZE_BARCODE, FONT_REGULAR)
-            barcode_text_start = center_x - (barcode_text_width / 2)
-            content.extend([
-                f'/{FONT_REGULAR} {FONT_SIZE_BARCODE} Tf',  # Regular font
-                f'1 0 0 1 {barcode_text_start} {y_bottom+20} Tm',
-                f'({escape_pdf_string(barcode_text)}) Tj'
-            ])
+        for page in range(page_count):
+            content = ['BT']
+            for i in range(4):
+                item_index = page * 4 + i
+                if item_index >= len(items):
+                    break
 
-        content.append('ET')
-        pages.append('\n'.join(content))
+                item = items[item_index]
+                y_bottom = 792 - (i * 198 + 180)  # Bottom of the label
+                y_top = y_bottom + LABEL_HEIGHT   # Top of the label
+                
+                # Draw main border
+                content.extend([
+                    '2 w',  # Set line width to 2
+                    '0.8 0.8 0.8 RG',  # Set stroke color to light gray
+                    f'{LABEL_MARGIN_LEFT} {y_bottom+LABEL_MARGIN_BOTTOM} {LABEL_WIDTH} {LABEL_HEIGHT} re S',  # Draw rectangle
+                ])
+                
+                # Draw secondary dashed border for cutting guide
+                content.extend([
+                    '[4 4] 0 d',  # Set dash pattern
+                    '1 w',  # Set line width to 1
+                    '0 0 0 RG',  # Set stroke color to black
+                    f'{LABEL_MARGIN_LEFT-10} {y_bottom-6} {LABEL_WIDTH+20} {LABEL_HEIGHT+20} re S',  # Draw rectangle
+                    '[] 0 d'  # Reset dash pattern
+                ])
+                
+                # Center of the label
+                center_x = LABEL_MARGIN_LEFT + (LABEL_WIDTH / 2)
+                
+                # Title 1 (larger font, centered)
+                title1_width = get_string_width(item["title1"], FONT_SIZE_TITLE1, FONT_BOLD)
+                title1_start = center_x - (title1_width / 2)
+                content.extend([
+                    f'/{FONT_BOLD} {FONT_SIZE_TITLE1} Tf',  # Bold font
+                    '0 0 0 rg',  # Black color
+                    f'1 0 0 1 {title1_start} {y_top-30} Tm',
+                    f'({escape_pdf_string(item["title1"])}) Tj'
+                ])
+                
+                # Title 2 (smaller font, centered)
+                title2_width = get_string_width(item["title2"], FONT_SIZE_TITLE2, FONT_REGULAR)
+                title2_start = center_x - (title2_width / 2)
+                content.extend([
+                    f'/{FONT_REGULAR} {FONT_SIZE_TITLE2} Tf',  # Regular font
+                    f'1 0 0 1 {title2_start} {y_top-55} Tm',
+                    f'({escape_pdf_string(item["title2"])}) Tj'
+                ])
+                
+                # Generate and draw barcode (centered)
+                barcode = generate_code39(item['barcode'])
+                content.append('0 G')  # Set fill color to black
+                barcode_total_width = sum(rect[2] for rect in barcode) * 0.5
+                barcode_start_x = center_x - (barcode_total_width / 2) - 50
+                barcode_start_y = y_bottom + (LABEL_HEIGHT - BARCODE_HEIGHT) / 3  # Bottom third vertically
+                for rect in barcode:
+                    x, _, width, height = rect
+                    content.append(f'{barcode_start_x + x*0.5} {barcode_start_y} {width*0.5} {BARCODE_HEIGHT} re f')
+                
+                # Barcode number (centered)
+                barcode_text = "*" + item["barcode"] + "*"
+                barcode_text_width = get_string_width(barcode_text, FONT_SIZE_BARCODE, FONT_REGULAR)
+                barcode_text_start = center_x - (barcode_text_width / 2)
+                content.extend([
+                    f'/{FONT_REGULAR} {FONT_SIZE_BARCODE} Tf',  # Regular font
+                    f'1 0 0 1 {barcode_text_start} {y_bottom+20} Tm',
+                    f'({escape_pdf_string(barcode_text)}) Tj'
+                ])
 
-    # Add page objects
-    for i in range(page_count):
-        pdf_content.append(f'{3+i*2} 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents {4+i*2} 0 R/Resources<</Font<</F1 {3+page_count*2} 0 R/F2 {4+page_count*2} 0 R>>>>>>endobj')
-        pdf_content.append(f'{4+i*2} 0 obj<</Length {5+i*2} 0 R>>stream\n{pages[i]}\nendstream\nendobj')
-        pdf_content.append(f'{5+i*2} 0 obj\n{len(pages[i])}\nendobj')
+            content.append('ET')
+            pages.append('\n'.join(content))
 
-    # Add Pages object
-    pdf_content.insert(2, f'2 0 obj<</Type/Pages/Kids[{" ".join([f"{3+i*2} 0 R" for i in range(page_count)])}]/Count {page_count}>>endobj')
+        # Add page objects
+        for i in range(page_count):
+            pdf_content.append(f'{3+i*2} 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents {4+i*2} 0 R/Resources<</Font<</F1 {3+page_count*2} 0 R/F2 {4+page_count*2} 0 R>>>>>>endobj')
+            pdf_content.append(f'{4+i*2} 0 obj<</Length {5+i*2} 0 R>>stream\n{pages[i]}\nendstream\nendobj')
+            pdf_content.append(f'{5+i*2} 0 obj\n{len(pages[i])}\nendobj')
 
-    # Add font objects
-    pdf_content.extend([
-        f'{3+page_count*2} 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj',
-        f'{4+page_count*2} 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica-Bold>>endobj',
-    ])
+        # Add Pages object
+        pdf_content.insert(2, f'2 0 obj<</Type/Pages/Kids[{" ".join([f"{3+i*2} 0 R" for i in range(page_count)])}]/Count {page_count}>>endobj')
 
-    # Create xref
-    xref_start = len('\n'.join(pdf_content)) + 1
-    pdf_content.append('xref')
-    pdf_content.append(f'0 {5+page_count*2}')
-    pdf_content.append('0000000000 65535 f ')
-    
-    offset = 0
-    for i in range(1, 5+page_count*2):
-        offset += len(pdf_content[i-1]) + 1  # +1 for newline
-        pdf_content.append(f'{offset:010} 00000 n ')
+        # Add font objects
+        pdf_content.extend([
+            f'{3+page_count*2} 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj',
+            f'{4+page_count*2} 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica-Bold>>endobj',
+        ])
 
-    # Trailer
-    pdf_content.extend([
-        f'trailer<</Size {5+page_count*2}/Root 1 0 R>>',
-        'startxref',
-        str(xref_start),
-        '%%EOF'
-    ])
+        # Create xref
+        xref_start = len('\n'.join(pdf_content)) + 1
+        pdf_content.append('xref')
+        pdf_content.append(f'0 {5+page_count*2}')
+        pdf_content.append('0000000000 65535 f ')
+        
+        offset = 0
+        for i in range(1, 5+page_count*2):
+            offset += len(pdf_content[i-1]) + 1  # +1 for newline
+            pdf_content.append(f'{offset:010} 00000 n ')
 
-    return '\n'.join(pdf_content).encode()
+        # Trailer
+        pdf_content.extend([
+            f'trailer<</Size {5+page_count*2}/Root 1 0 R>>',
+            'startxref',
+            str(xref_start),
+            '%%EOF'
+        ])
+
+        return '\n'.join(pdf_content).encode()
+
+    except Exception as e:
+        raise ValueError(f"Error creating PDF: {str(e)}")
